@@ -1,0 +1,14 @@
+{
+  "dotnet": {
+    "version": "10.0.404",
+    "file": "dotnet-sdk-10.0.404-win-x64.zip",
+    "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.404/dotnet-sdk-10.0.404-win-x64.zip",
+    "sha512": "330ddd2665b43cd2e428216a0d8ea1ac7bb19b5434fdc530e62010dc3b52823a620bf95489d628e1ed6f5122401793ee4887cca4a019122361a1231497f632ee"
+  },
+  "inno": {
+    "version": "7.1.1",
+    "file": "innosetup-7.1.1-x64.exe",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe",
+    "sha256": "8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0"
+  }
+}

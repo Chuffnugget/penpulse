@@ -1,0 +1,20 @@
+#requires -Version 5.1
+[CmdletBinding()]
+param([string]$DotNetPath)
+. "$PSScriptRoot\common.ps1"
+$dotnet = Resolve-DotNet $DotNetPath
+$output = Get-PublishDirectory
+New-Item -ItemType Directory -Path $output -Force | Out-Null
+Push-Location $script:RepoRoot
+try {
+    Invoke-Tool $dotnet @('publish','PenPulse.csproj','-c','Release','-r','win-x64','--self-contained','true',
+        '-p:PublishSingleFile=true','-p:IncludeNativeLibrariesForSelfExtract=true',
+        '-p:EnableCompressionInSingleFile=true','-p:DebugType=None','-o',$output,'--nologo')
+    foreach ($name in @('README.md','CHANGELOG.md','LICENSE','THIRD-PARTY-NOTICES.md')) { Copy-Item -LiteralPath (Join-Path $script:RepoRoot $name) -Destination $output -Force }
+    Copy-Item -LiteralPath (Join-Path $script:RepoRoot 'docs') -Destination $output -Recurse -Force
+    & "$PSScriptRoot\collect-notices.ps1"
+    Assert-PublishedVersion
+    & "$PSScriptRoot\test-package.ps1"
+    Write-Host "Published: $output"
+}
+finally { Pop-Location }

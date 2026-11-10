@@ -1,0 +1,28 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_preserve_single_line_blocks = false
+csharp_preserve_single_line_statements = false
+
+[*.{ps1,cmd,iss}]
+end_of_line = crlf
+
+[*.{md,json,csproj}]
+end_of_line = lf
+
+[third-party/{WINDOWS-SDK-LICENSE.rtf,CSWINRT-LICENSE.txt}]
+charset = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+end_of_line = unset

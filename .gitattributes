@@ -1,0 +1,14 @@
+* text=auto
+*.cs text eol=lf
+*.csproj text eol=lf
+*.manifest text eol=lf
+*.md text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+.editorconfig text eol=lf
+*.iss text eol=crlf
+*.json text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+third-party/WINDOWS-SDK-LICENSE.rtf -text
+third-party/CSWINRT-LICENSE.txt -text
