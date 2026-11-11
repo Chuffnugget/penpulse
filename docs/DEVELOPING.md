@@ -15,6 +15,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-tools.ps
 
 Setup downloads pinned tools from Microsoft and the official Inno Setup release,
 verifies checksums and the Inno installer signature, and keeps tools in `.tools`.
+It selects the native x64 or ARM64 SDK; `global.json` pins the SDK version.
 It leaves the system PATH alone. Installer builds require [Inno Setup 7](https://jrsoftware.org/isdl.php);
 omit `-IncludeInstaller` for app-only builds. Restore needs NuGet access or a cache.
 
@@ -55,7 +56,7 @@ project-local tools installed by `setup-tools.ps1`. If Task is unavailable, use
 | `scripts/build.ps1` | Compile in Release; accepts `-Configuration Debug`. |
 | `scripts/test.ps1` | Run regression and isolated Windows control checks. |
 | `scripts/test-windows.ps1` | Test the actual configuration controls in isolated, invisible forms. |
-| `scripts/publish.ps1` | Publish a self-contained x64 app, documentation and licence notices. |
+| `scripts/publish.ps1` | Publish a self-contained app, documentation and licence notices for the selected architecture. |
 | `scripts/build-installer.ps1` | Test, publish and compile the installer. `-SkipTests` skips regression and packaging failure tests. |
 | `scripts/test-package.ps1` | Check versions and licence hashes. Add `-ZipPath` to check a portable ZIP. |
 | `scripts/test-packaging.ps1` | Verify that damaged package copies are rejected. |
@@ -66,7 +67,11 @@ project-local tools installed by `setup-tools.ps1`. If Task is unavailable, use
 Use `-DotNetPath` / `-InnoSetupPath`, or `PENPULSE_DOTNET` / `PENPULSE_ISCC`, to
 select existing tools. Pass these parameters only to scripts that use that tool.
 
-Published files go to `artifacts/publish/<version>/win-x64`; release files go to
+Publish, installer, package-check, release and run scripts accept
+`-RuntimeIdentifier win-x64` or `-RuntimeIdentifier win-arm64`. The default is the
+host architecture. x64 means both Intel and AMD 64-bit PCs.
+
+Published files go to `artifacts/publish/<version>/<runtime>`; release files go to
 `artifacts/release`. Versioned folders let a new release build while an older copy
 runs. Exit the older copy before using the new version, since only one instance
 runs per user. Copy its settings to keep them. Rebuilding the same version still
@@ -79,6 +84,38 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\release.ps1
 Packaging uses an explicit file list. Personal data and tools are excluded. The
 notice collector reads the published dependency inventory and copies licences
 from those exact packages. An unrecognised dependency stops the release for review.
+
+## CI and tagged releases
+
+`.github/workflows/windows-release.yml` runs on pushes to `main`, pull requests
+and manual dispatches. Both Windows x64 and Windows ARM64 runners execute the
+regression, control, packaging and installer tests and upload their packages.
+
+To publish a new release, update `PenPulse.csproj` and `CHANGELOG.md`, commit,
+and push the matching version tag after CI passes:
+
+```powershell
+git push origin main
+git tag -a v0.0.2 -m "Release 0.0.2"
+git push origin v0.0.2
+```
+
+The first public release is `v0.0.1`; earlier 0.8/0.9 numbers were unpublished
+development builds. Tags must match the project version exactly. Alpha, beta and
+release-candidate tags such as `v0.0.2-beta.1` publish as prereleases.
+
+Only the release job gets write access. It waits for both native builds, creates
+a source ZIP from the tagged commit, verifies package checksums, uploads a draft,
+then verifies the exact remote file set, sizes and SHA-256 digests before publishing.
+Published releases are never overwritten; a failed draft upload can be rerun.
+Stable installer aliases support the README's latest-download links.
+
+For local cross-compilation, use `task release -- -RuntimeIdentifier win-arm64
+-SkipInstallerTests` on an x64 PC (on one command line). This still checks the PE
+architecture and package contents, but skips installer execution on the wrong CPU.
+CI never uses that switch. Local checksum files are named `SHA256SUMS-x64.txt`
+and `SHA256SUMS-arm64.txt`; the public release has a combined `SHA256SUMS.txt`.
+Releases are currently unsigned and do not require signing secrets.
 
 ## Code layout
 

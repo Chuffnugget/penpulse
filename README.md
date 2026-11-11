@@ -6,13 +6,17 @@ PenPulse adds feedback for taps, holds, right-clicks, drawing, dragging, erasing
 and the pen's top button. It runs in the system tray while you use other apps.
 
 **Experimental.** Earlier builds were tested with a Surface Slim Pen 2 on a
-Surface Pro 9. Version 0.9.1 needs a fresh physical pen check; other combinations
+Surface Pro 9. Version 0.0.1 needs a fresh physical pen check; other combinations
 of pens, PCs and drivers remain unverified.
 
 ## Install
 
-Use `PenPulse-0.9.1-Setup-x64.exe`, or extract the portable ZIP into a writable
-folder and open `PenPulse.exe`. Windows 11 and a compatible haptic pen are
+Download the [Intel/AMD x64 installer](https://github.com/Chuffnugget/penpulse/releases/latest/download/PenPulse-Windows-x64-Setup.exe)
+or [ARM64 installer](https://github.com/Chuffnugget/penpulse/releases/latest/download/PenPulse-Windows-arm64-Setup.exe).
+Choose ARM64 for Windows on Arm; choose x64 for Intel or AMD PCs.
+The [release page](https://github.com/Chuffnugget/penpulse/releases/latest) also has
+portable ZIPs, source code and SHA-256 checksums. Extract the matching portable
+ZIP into a writable folder and open `PenPulse.exe`. Windows 11 and a compatible haptic pen are
 required. The .NET runtime is included. The installer is currently unsigned.
 
 Setup installs for your Windows account without administrator privileges.

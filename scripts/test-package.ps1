@@ -1,25 +1,29 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([string]$PackageDirectory, [string]$ZipPath)
+param([string]$PackageDirectory, [string]$ZipPath, [ValidateSet('win-x64','win-arm64')][string]$RuntimeIdentifier)
 . "$PSScriptRoot\common.ps1"
-if (!$PackageDirectory) { $PackageDirectory = Get-PublishDirectory }
+if (!$RuntimeIdentifier) { $RuntimeIdentifier = Get-HostRuntimeIdentifier }
+$architecture = $RuntimeIdentifier.Substring(4)
+if (!$PackageDirectory) { $PackageDirectory = Get-PublishDirectory $RuntimeIdentifier }
 $root = [IO.Path]::GetFullPath($PackageDirectory).TrimEnd('\')+'\'
 $required = @('PenPulse.exe','README.md','CHANGELOG.md','LICENSE','THIRD-PARTY-NOTICES.md','THIRD-PARTY-NOTICES.json','docs/DEVELOPING.md','docs/TESTING.md')
 foreach ($name in $required) {
     if (!(Test-Path -LiteralPath (Join-Path $root $name) -PathType Leaf)) { throw "Package is missing $name" }
 }
 $actual = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $root 'PenPulse.exe')).ProductVersion.Split('+')[0]
+if ((Get-ExecutableRuntimeIdentifier (Join-Path $root 'PenPulse.exe')) -ne $RuntimeIdentifier) { throw 'Packaged executable has the wrong architecture.' }
 if ($actual -ne (Get-ProjectVersion)) { throw 'Packaged executable has the wrong version.' }
 foreach ($name in @('README.md','CHANGELOG.md','LICENSE','THIRD-PARTY-NOTICES.md','docs/DEVELOPING.md','docs/TESTING.md')) {
     if ((Get-FileHash -LiteralPath (Join-Path $root $name)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $script:RepoRoot $name)).Hash) { throw "Stale packaged $name" }
 }
 $manifest = Get-Content -LiteralPath (Join-Path $root 'THIRD-PARTY-NOTICES.json') -Raw | ConvertFrom-Json
+if ($manifest.runtimeIdentifier -ne $RuntimeIdentifier) { throw 'Notices architecture does not match the package.' }
 if ($manifest.applicationVersion -ne (Get-ProjectVersion)) { throw 'Stale notices manifest.' }
 [xml]$project = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'PenPulse.csproj') -Raw
 $references = @($project.Project.ItemGroup.FrameworkReference | Where-Object { $_ })
 $expected = @{
-    'Microsoft.NETCore.App.Runtime.win-x64' = [string]($references | Where-Object Update -eq 'Microsoft.NETCore.App').RuntimeFrameworkVersion
-    'Microsoft.WindowsDesktop.App.Runtime.win-x64' = [string]($references | Where-Object Update -eq 'Microsoft.WindowsDesktop.App.WindowsForms').RuntimeFrameworkVersion
+    "Microsoft.NETCore.App.Runtime.$RuntimeIdentifier" = [string]($references | Where-Object Update -eq 'Microsoft.NETCore.App').RuntimeFrameworkVersion
+    "Microsoft.WindowsDesktop.App.Runtime.$RuntimeIdentifier" = [string]($references | Where-Object Update -eq 'Microsoft.WindowsDesktop.App.WindowsForms').RuntimeFrameworkVersion
     'Microsoft.Windows.SDK.NET.Ref' = '10.0.22621.57'
 }
 if (@($manifest.components).Count -ne $expected.Count) { throw 'Unexpected component inventory.' }
@@ -29,9 +33,9 @@ foreach ($component in $manifest.components) {
     $seen[$component.id] = $true
 }
 $expectedNotices = @(
-    "licenses/Microsoft.NETCore.App.Runtime.win-x64-$($expected['Microsoft.NETCore.App.Runtime.win-x64'])/LICENSE.TXT",
-    "licenses/Microsoft.NETCore.App.Runtime.win-x64-$($expected['Microsoft.NETCore.App.Runtime.win-x64'])/THIRD-PARTY-NOTICES.TXT",
-    "licenses/Microsoft.WindowsDesktop.App.Runtime.win-x64-$($expected['Microsoft.WindowsDesktop.App.Runtime.win-x64'])/LICENSE",
+    "licenses/Microsoft.NETCore.App.Runtime.$RuntimeIdentifier-$($expected["Microsoft.NETCore.App.Runtime.$RuntimeIdentifier"])/LICENSE.TXT",
+    "licenses/Microsoft.NETCore.App.Runtime.$RuntimeIdentifier-$($expected["Microsoft.NETCore.App.Runtime.$RuntimeIdentifier"])/THIRD-PARTY-NOTICES.TXT",
+    "licenses/Microsoft.WindowsDesktop.App.Runtime.$RuntimeIdentifier-$($expected["Microsoft.WindowsDesktop.App.Runtime.$RuntimeIdentifier"])/LICENSE",
     'licenses/Microsoft.Windows.SDK.NET.Ref-10.0.22621.57/WINDOWS-SDK-LICENSE.rtf',
     'licenses/Microsoft.Windows.SDK.NET.Ref-10.0.22621.57/CSWINRT-LICENSE.txt'
 )

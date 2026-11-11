@@ -56,6 +56,11 @@ assignment, reload, calibration drafts, supported texture choices and scrolling.
 
 ## Limits
 
+CI tests both architectures on native GitHub Windows runners. Package checks
+verify the executable's PE architecture and reject mismatched runtime manifests.
+Release guard checks reject invalid/mismatched tags, missing architecture assets
+and altered checksums without contacting GitHub. No CI runner has a physical pen.
+
 - This .NET 10 release needs a fresh physical pen check. Screen double-tap and
   top-button hold have not been physically confirmed.
 - Background feedback depends on a newer Windows haptics API. The older

@@ -1,10 +1,13 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([string]$InnoSetupPath)
+param([string]$InnoSetupPath, [ValidateSet('win-x64','win-arm64')][string]$RuntimeIdentifier)
 . "$PSScriptRoot\common.ps1"
+if (!$RuntimeIdentifier) { $RuntimeIdentifier = Get-HostRuntimeIdentifier }
+$architecture = $RuntimeIdentifier.Substring(4)
+if ($RuntimeIdentifier -ne (Get-HostRuntimeIdentifier)) { throw 'Installer execution tests require a native runner for the target architecture.' }
 $compiler = Resolve-InnoSetup $InnoSetupPath
-Assert-PublishedVersion
-& "$PSScriptRoot\test-package.ps1"
+Assert-PublishedVersion $RuntimeIdentifier
+& "$PSScriptRoot\test-package.ps1" -RuntimeIdentifier $RuntimeIdentifier
 # Compile the same recipe with an isolated identity. Never start the app or
 # touch the real installation, its mutex, startup entry, or personal settings.
 $id = [Guid]::NewGuid().ToString('N')
@@ -35,10 +38,10 @@ function Write-Startup([string]$Value) {
 }
 $success = $false
 try {
-    Invoke-Tool $compiler @('--quiet',("--define=AppVersion="+(Get-ProjectVersion)),
-        ("--define=PublishDir="+(Get-PublishDirectory)),("--define=ReleaseDir="+$testRoot),
+    Invoke-Tool $compiler @('--quiet',("--define=AppVersion="+(Get-ProjectVersion)),("--define=AppArchitecture="+$architecture),
+        ("--define=PublishDir="+(Get-PublishDirectory $RuntimeIdentifier)),("--define=ReleaseDir="+$testRoot),
         ("--define=SmokeTestId="+$id),(Join-Path $script:RepoRoot 'installer\PenPulse.iss'))
-    $setup = Join-Path $testRoot ('PenPulse-'+(Get-ProjectVersion)+'-Setup-x64.exe')
+    $setup = Join-Path $testRoot ('PenPulse-'+(Get-ProjectVersion)+'-Setup-'+$architecture+'.exe')
     $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR="'+$installDir+'"'),('/LOG="'+(Join-Path $testRoot 'install.log')+'"'))
     $mutex = New-Object Threading.Mutex($true,('Local\PenPulse-Test-'+$id+'-'+[Environment]::UserName))
     try {
@@ -50,8 +53,8 @@ try {
     $installedExe = Join-Path $installDir 'PenPulse.exe'
     $uninstaller = Join-Path $installDir 'unins000.exe'
     Assert-Installer (Test-Path -LiteralPath $installedExe) 'Fresh install creates the executable'
-    Assert-Installer ((Get-FileHash -LiteralPath $installedExe).Hash -eq (Get-FileHash -LiteralPath (Join-Path (Get-PublishDirectory) 'PenPulse.exe')).Hash) 'Installed executable matches the published build'
-    & "$PSScriptRoot\test-package.ps1" -PackageDirectory $installDir
+    Assert-Installer ((Get-FileHash -LiteralPath $installedExe).Hash -eq (Get-FileHash -LiteralPath (Join-Path (Get-PublishDirectory $RuntimeIdentifier) 'PenPulse.exe')).Hash) 'Installed executable matches the published build'
+    & "$PSScriptRoot\test-package.ps1" -RuntimeIdentifier $RuntimeIdentifier -PackageDirectory $installDir
     Assert-Installer $true 'Installed package contains the MIT licence and complete verified third-party notices'
     $registration = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($uninstallKey)
     Assert-Installer ($null -ne $registration) 'Uninstaller is registered for the current user'

@@ -4,6 +4,7 @@ param([switch]$IncludeInstaller)
 . "$PSScriptRoot\common.ps1"
 if ($env:OS -ne 'Windows_NT' -or ![Environment]::Is64BitOperatingSystem) { throw 'These build tools require 64-bit Windows.' }
 $manifest = Get-Content -LiteralPath "$PSScriptRoot\tools.json" -Raw | ConvertFrom-Json
+$sdk = if ((Get-HostRuntimeIdentifier) -eq 'win-arm64') { $manifest.dotnetArm64 } else { $manifest.dotnet }
 $toolRoot = Join-Path $script:RepoRoot '.tools'
 $downloads = Join-Path $toolRoot 'downloads'
 New-Item -ItemType Directory -Path $downloads -Force | Out-Null
@@ -20,12 +21,13 @@ function Get-VerifiedDownload($entry, [string]$algorithm, [string]$expected) {
     return $archive
 }
 $dotnet = Join-Path $toolRoot 'dotnet\dotnet.exe'
-if (!(Test-Path -LiteralPath $dotnet) -or ((& $dotnet --version) -ne $manifest.dotnet.version)) {
-    $archive = Get-VerifiedDownload $manifest.dotnet 'SHA512' $manifest.dotnet.sha512
+if (!(Test-Path -LiteralPath $dotnet) -or (Get-ExecutableRuntimeIdentifier $dotnet) -ne (Get-HostRuntimeIdentifier) -or ((& $dotnet --version) -ne $sdk.version)) {
+    $archive = Get-VerifiedDownload $sdk 'SHA512' $sdk.sha512
     Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $toolRoot 'dotnet') -Force
 }
-if ((& $dotnet --version) -ne $manifest.dotnet.version) { throw 'The local .NET SDK was not installed correctly.' }
-Write-Host "Ready: .NET SDK $($manifest.dotnet.version)"
+if ((& $dotnet --version) -ne $sdk.version) { throw 'The local .NET SDK was not installed correctly.' }
+if ((Get-ExecutableRuntimeIdentifier $dotnet) -ne (Get-HostRuntimeIdentifier)) { throw 'The SDK must match the native host architecture.' }
+Write-Host "Ready: .NET SDK $($sdk.version)"
 if ($IncludeInstaller) {
     $compiler = Join-Path $toolRoot 'inno\ISCC.exe'
     if (!(Test-Path -LiteralPath $compiler) -or ((& $compiler --version) -ne $manifest.inno.version)) {

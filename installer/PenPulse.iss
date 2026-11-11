@@ -7,6 +7,16 @@
 #ifndef ReleaseDir
   #error ReleaseDir must be supplied by scripts/build-installer.ps1
 #endif
+#ifndef AppArchitecture
+  #error AppArchitecture must be x64 or arm64
+#endif
+#if AppArchitecture == "arm64"
+  #define AllowedArchitecture "arm64"
+#elif AppArchitecture == "x64"
+  #define AllowedArchitecture "x64compatible and not arm64"
+#else
+  #error Unsupported AppArchitecture
+#endif
 #ifdef SmokeTestId
   #define ProductName "PenPulse Installer Test " + SmokeTestId
   #define ProductId "PenPulse.Test." + SmokeTestId
@@ -29,8 +39,8 @@ LicenseFile={#PublishDir}\licenses\Microsoft.Windows.SDK.NET.Ref-10.0.22621.57\W
 DefaultDirName={localappdata}\Programs\{#ProductName}
 DefaultGroupName={#ProductName}
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#AllowedArchitecture}
+ArchitecturesInstallIn64BitMode={#AllowedArchitecture}
 MinVersion=10.0.22000
 AppMutex={#MutexName}
 CloseApplications=no
@@ -38,7 +48,7 @@ RestartApplications=no
 DisableProgramGroupPage=yes
 DisableDirPage=auto
 OutputDir={#ReleaseDir}
-OutputBaseFilename=PenPulse-{#AppVersion}-Setup-x64
+OutputBaseFilename=PenPulse-{#AppVersion}-Setup-{#AppArchitecture}
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern

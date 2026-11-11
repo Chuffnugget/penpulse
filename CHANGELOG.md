@@ -1,5 +1,15 @@
 # Changes
 
+## 0.0.1 - 11 November 2026
+
+- First public release, starting the public version sequence at 0.0.1.
+- Ship separate Intel/AMD x64 and ARM64 installers and portable packages.
+- Build and test on native Windows x64 and ARM64 GitHub runners.
+- Publish verified releases from matching version tags, with source and checksums.
+- Include profiles, calibration, drawing textures, pressure response and 100% strength defaults.
+
+The versions below were internal development builds, not public releases.
+
 ## 0.9.1 - 10 November 2026
 
 - Default overall, drawing and action strengths to 100%.

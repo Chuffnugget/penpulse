@@ -1,0 +1,126 @@
+name: Windows CI and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate project version and tag
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: ./scripts/check-release.ps1 -Tag $env:RELEASE_TAG
+      - name: Check release destination
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/publish-release.ps1 -CheckOnly -Tag $env:RELEASE_TAG -Repository $env:RELEASE_REPOSITORY
+
+  build:
+    name: Build and test ${{ matrix.architecture }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runtime: win-x64
+            runner: windows-2025
+          - architecture: arm64
+            runtime: win-arm64
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Check native runner architecture
+        env:
+          TARGET_RUNTIME: ${{ matrix.runtime }}
+        run: ./scripts/check-release.ps1 -RuntimeIdentifier $env:TARGET_RUNTIME
+      - name: Install verified build tools
+        run: ./scripts/setup-tools.ps1 -IncludeInstaller
+      - name: Test, publish, and verify installer
+        env:
+          TARGET_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          New-Item -ItemType Directory -Path artifacts/logs -Force | Out-Null
+          Start-Transcript -Path artifacts/logs/build.txt
+          try { ./scripts/release.ps1 -RuntimeIdentifier $env:TARGET_RUNTIME }
+          finally { Stop-Transcript }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-${{ matrix.architecture }}
+          path: |
+            artifacts/release/PenPulse-*-Setup-${{ matrix.architecture }}.exe
+            artifacts/release/PenPulse-*-Windows-${{ matrix.architecture }}.zip
+            artifacts/release/SHA256SUMS-${{ matrix.architecture }}.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: logs-${{ matrix.architecture }}
+          path: |
+            artifacts/logs/
+            .tools/installer-tests/**/*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  release:
+    name: Publish verified release
+    if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'pull_request'
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: windows-*
+          path: artifacts/release
+          merge-multiple: true
+      - name: Archive the tagged source
+        run: |
+          . ./scripts/common.ps1
+          ./scripts/write-source-archive.ps1 -Destination "$env:GITHUB_WORKSPACE/artifacts/release/PenPulse-$(Get-ProjectVersion)-Source.zip"
+      - name: Verify uploads and publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/publish-release.ps1 -ArtifactDirectory artifacts/release -Tag $env:RELEASE_TAG -Repository $env:RELEASE_REPOSITORY

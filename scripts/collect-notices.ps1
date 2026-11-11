@@ -1,12 +1,14 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param()
+param([ValidateSet('win-x64','win-arm64')][string]$RuntimeIdentifier)
 . "$PSScriptRoot\common.ps1"
+if (!$RuntimeIdentifier) { $RuntimeIdentifier = Get-HostRuntimeIdentifier }
+$architecture = $RuntimeIdentifier.Substring(4)
 [xml]$project = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'PenPulse.csproj') -Raw
 $framework = [string]$project.Project.PropertyGroup.TargetFramework
-$deps = Get-Content -LiteralPath (Join-Path $script:RepoRoot "bin\Release\$framework\win-x64\PenPulse.deps.json") -Raw | ConvertFrom-Json
+$deps = Get-Content -LiteralPath (Join-Path $script:RepoRoot "bin\Release\$framework\$RuntimeIdentifier\PenPulse.deps.json") -Raw | ConvertFrom-Json
 $assets = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'obj\project.assets.json') -Raw | ConvertFrom-Json
-$output = Get-PublishDirectory
+$output = Get-PublishDirectory $RuntimeIdentifier
 $licenseDir = Join-Path $output 'licenses'
 Remove-ProjectDirectory $licenseDir
 New-Item -ItemType Directory -Path $licenseDir -Force | Out-Null
@@ -24,10 +26,10 @@ foreach ($library in $deps.libraries.PSObject.Properties) {
     if (!$package) { throw "Missing restored package: $id $version" }
     $sources = @()
     switch ($id) {
-        'Microsoft.NETCore.App.Runtime.win-x64' {
+        "Microsoft.NETCore.App.Runtime.$RuntimeIdentifier" {
             $sources = @((Join-Path $package 'LICENSE.TXT'), (Join-Path $package 'THIRD-PARTY-NOTICES.TXT'))
         }
-        'Microsoft.WindowsDesktop.App.Runtime.win-x64' {
+        "Microsoft.WindowsDesktop.App.Runtime.$RuntimeIdentifier" {
             $sources = @((Join-Path $package 'LICENSE'))
             $sources += @(Get-ChildItem -LiteralPath $package -File -Filter '*NOTICE*' | Select-Object -ExpandProperty FullName)
         }
@@ -49,7 +51,7 @@ foreach ($library in $deps.libraries.PSObject.Properties) {
         $files += [ordered]@{ path=$relative; sha256=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant() }
     }
 }
-$manifest = [ordered]@{ applicationVersion=(Get-ProjectVersion); components=$components; files=$files }
+$manifest = [ordered]@{ applicationVersion=(Get-ProjectVersion); runtimeIdentifier=$RuntimeIdentifier; components=$components; files=$files }
 $json = $manifest | ConvertTo-Json -Depth 6
 [IO.File]::WriteAllText((Join-Path $output 'THIRD-PARTY-NOTICES.json'), $json+[Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
 Write-Host "Collected licence notices for $($components.Count) bundled runtime packs."
