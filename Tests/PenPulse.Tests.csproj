@@ -3,4 +3,12 @@
   <ItemGroup><Compile Include="../Gestures.cs" Link="Gestures.cs"/><Compile Include="../Native.cs" Link="Native.cs"/><Compile Include="../StrokeMotion.cs" Link="StrokeMotion.cs"/><Compile Include="../DrawingPulseClock.cs" Link="DrawingPulseClock.cs"/><Compile Include="../Settings.cs" Link="Settings.cs"/><Compile Include="../EffectSettings.cs" Link="EffectSettings.cs"/></ItemGroup>
   <ItemGroup><Compile Include="../PenShortcutRecognizer.cs" Link="PenShortcutRecognizer.cs"/></ItemGroup>
   <ItemGroup><Compile Include="../Haptics.cs" Link="Haptics.cs"/><Compile Include="../PenContactState.cs" Link="PenContactState.cs"/></ItemGroup>
+  <ItemGroup>
+    <Compile Remove="Windows/**" />
+    <Compile Include="../ProfileLibrary.cs" Link="ProfileLibrary.cs" />
+    <Compile Include="../LocalJson.cs" Link="LocalJson.cs" />
+    <Compile Include="../DesktopOptions.cs" Link="DesktopOptions.cs" />
+    <Compile Include="../RuntimeState.cs" Link="RuntimeState.cs" />
+    <Compile Include="../Diagnostics.cs" Link="Diagnostics.cs" />
+  </ItemGroup>
 </Project>

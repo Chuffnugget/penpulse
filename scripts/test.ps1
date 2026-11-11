@@ -6,3 +6,4 @@ $dotnet = Resolve-DotNet $DotNetPath
 Push-Location $script:RepoRoot
 try { Invoke-Tool $dotnet @('run','--project','Tests\PenPulse.Tests.csproj','-c',$Configuration) }
 finally { Pop-Location }
+& "$PSScriptRoot\test-windows.ps1" -DotNetPath $dotnet

@@ -25,11 +25,36 @@ take precedence. `run.cmd` supplies the prefix for you.
 
 ## Commands
 
+The optional [Task runner](https://taskfile.dev/docs/installation) provides short
+names for the scripts below. Install it once for your Windows account:
+
+```powershell
+winget install --id Task.Task --exact --source winget --scope user
+```
+
+Restart your terminal after installation, then run from the repository folder:
+
+```powershell
+task run
+task build
+task test
+task build-installer
+task --list
+```
+
+Task uses the same scripts and process-only execution-policy bypass as `run.cmd`.
+Pass script options after `--`, for example `task run -- -Rebuild`,
+`task build -- -Configuration Debug`, or `task clean -- -WhatIf`.
+Installing Task makes `task` available on your user PATH; it is separate from the
+project-local tools installed by `setup-tools.ps1`. If Task is unavailable, use
+`run.cmd` or the PowerShell commands directly.
+
 | Script | Purpose |
 | --- | --- |
 | `run.cmd` | Open the published version. Pass `-Rebuild` after edits, or `-Background` to start hidden. |
 | `scripts/build.ps1` | Compile in Release; accepts `-Configuration Debug`. |
-| `scripts/test.ps1` | Run the console regression suite. |
+| `scripts/test.ps1` | Run regression and isolated Windows control checks. |
+| `scripts/test-windows.ps1` | Test the actual configuration controls in isolated, invisible forms. |
 | `scripts/publish.ps1` | Publish a self-contained x64 app, documentation and licence notices. |
 | `scripts/build-installer.ps1` | Test, publish and compile the installer. `-SkipTests` skips regression and packaging failure tests. |
 | `scripts/test-package.ps1` | Check versions and licence hashes. Add `-ZipPath` to check a portable ZIP. |
@@ -66,7 +91,10 @@ from those exact packages. An unrecognised dependency stops the release for revi
 | `StrokeMotion.cs`, `DrawingPulseClock.cs` | Movement detection and pulse rate limiting. |
 | `PenShortcutRecognizer.cs` | Top-button chords and the Slim Pen release-only workaround. |
 | `Haptics.cs`, `DesktopHaptics.cs` | Effect scheduling, cancellation and Windows haptics routing. |
-| `Settings.cs`, `EffectSettings.cs`, `ConfigurationPanel.cs` | Saved preferences and their controls. |
+| `Settings.cs`, `EffectSettings.cs`, `ConfigurationPanel.cs` | Feedback preferences and controls. |
+| `ProfileLibrary.cs`, `LocalJson.cs` | Profile snapshots, app mappings, import/export and local persistence. |
+| `RuntimeState.cs`, `DesktopOptions.cs`, `ShortcutRegistration.cs` | Pause/reconnect timing, pressure response and global shortcut registration. |
+| `FeaturePanels.cs`, `CalibrationForm.cs`, `Diagnostics.cs` | Profile/tools pages, calibration and troubleshooting. |
 
 Raw pen input takes priority over promoted mouse input. The fallback briefly
 delays events to let matching HID reports arrive, then checks their age. Contact
@@ -81,6 +109,7 @@ The repository's `.editorconfig` defines C# whitespace and line breaks:
 ```powershell
 .\.tools\dotnet\dotnet.exe format whitespace PenPulse.csproj --no-restore
 .\.tools\dotnet\dotnet.exe format whitespace Tests\PenPulse.Tests.csproj --no-restore
+.\.tools\dotnet\dotnet.exe format whitespace Tests\Windows\PenPulse.WindowsTests.csproj --no-restore
 ```
 
 Add `--verify-no-changes` to check without editing. Do not reformat vendor licences.
@@ -101,3 +130,15 @@ the startup entry only when it belongs to that installation.
 - [Windows pen states](https://learn.microsoft.com/en-us/windows-hardware/design/component-guidelines/windows-pen-states)
 - [Bluetooth pen buttons](https://learn.microsoft.com/en-us/windows-hardware/design/component-guidelines/windows-pen-designs)
 - [Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/using-raw-input)
+
+Profiles contain feedback settings only. App exclusions stay in settings.json;
+startup remains a Windows setting; shortcuts and reconnect options live in
+desktop.json. Profiles use an explicit versioned envelope, bounded file sizes and
+new IDs on import. Local profile/options saves keep the previous file as a backup.
+
+Continuous textures are requested for 120 ms and refreshed at 80 ms while contact
+and motion remain current. A lost request expires, and cancellation also sends a
+stop. The existing Click pulse scheduler remains the fallback. The duration ABI
+signature follows Microsoft's windows-rs IInputHapticsManager vtable (slot 11).
+Pressure is decoded from Digitizers/Tip Pressure, not Generic Desktop/X, and is
+normalised using each HID descriptor's logical range.

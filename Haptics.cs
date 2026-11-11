@@ -13,19 +13,32 @@ internal sealed class Haptics : IDisposable
     private const int MaximumCompletionMilliseconds = 65;
     private SimpleHapticsController? controller;
     private SimpleHapticsControllerFeedback? click;
-    private readonly DesktopHaptics desktop = new();
+    private DesktopHaptics desktop = new();
+    private SimpleHapticsControllerFeedback? texture;
+    private SimpleHapticsControllerFeedback[] availableFeedback = [];
+    private bool intensitySupported, durationSupported;
+    private bool continuousPlaying;
+    private long nextTextureAt;
+    private double? drawingPressure;
+    private const int TextureDurationMilliseconds = 120;
+    private const int TextureRefreshMilliseconds = 80;
+    public string TextureStatus { get; private set; } = "Pulse feedback";
+    public bool IntensitySupported => Connected && intensitySupported;
+    public IReadOnlyList<DrawingTexture> AvailableTextures => controller == null ? [DrawingTexture.Pulses] : Enum.GetValues<DrawingTexture>().Where(t => t == DrawingTexture.Pulses || availableFeedback.Any(f => f.Waveform == TextureWaveform(t))).ToArray();
+
     private readonly System.Windows.Forms.Timer timer = new()
     {
         Interval = 15
     };
     private readonly Queue<(int Delay, double Strength)> pulses = new();
     private long stopAt, nextPulseAt;
+    private double sequenceIntensity;
     private bool playing, shortcutPattern;
     private bool drawingPlaying, lastSendRouted;
     private readonly DrawingPulseClock drawingClock = new();
     private Settings preferences = new();
     public bool Connected => controller != null && click != null;
-    public double Intensity { get; set; } = 0.7;
+    public double Intensity { get; set; } = 1;
     public long Commands
     {
         get; private set;
@@ -59,12 +72,16 @@ internal sealed class Haptics : IDisposable
     public Func<bool> PlaybackAllowed { get; set; } = () => true;
 
     public Haptics() => timer.Tick += (_, _) => Tick();
-    public void Configure(Settings settings)
+    public void Configure(Settings settings, bool preserveShortcut = false)
     {
-        Cancel();
+        if (preserveShortcut && shortcutPattern)
+            CancelContact();
+        else
+            Cancel();
         preferences = settings;
         Intensity = settings.Intensity;
         drawingClock.IntervalMilliseconds = settings.DrawingIntervalMilliseconds;
+        SelectTexture();
     }
 
     public bool Connect(uint pointerId)
@@ -87,11 +104,12 @@ internal sealed class Haptics : IDisposable
                     ConnectionMethod = "InputHapticsManager";
             }
 
-            SupportedWaveforms = candidate == null ? "" : string.Join(",", candidate.SupportedFeedback.Select(f => f.Waveform));
-            var feedback = candidate?.SupportedFeedback.FirstOrDefault(f => f.Waveform == KnownSimpleHapticsControllerWaveforms.Click);
+            var supported = candidate?.SupportedFeedback.ToArray() ?? [];
+            SupportedWaveforms = string.Join(",", supported.Select(f => f.Waveform));
+            var feedback = supported.FirstOrDefault(f => f.Waveform == KnownSimpleHapticsControllerWaveforms.Click);
             if (candidate == null)
             {
-                State = "Pen input detected, but no vibration controller is available yet. Touch here again after connecting the pen.";
+                State = "No vibration controller is available yet. Wake the pen or touch the blue pad.";
                 Changed?.Invoke();
                 return false;
             }
@@ -104,8 +122,16 @@ internal sealed class Haptics : IDisposable
                 return false;
             }
 
+            // Cache capabilities while connecting. Reading them from a disconnected
+            // COM device during a status refresh must not crash the window.
+            bool supportsIntensity = candidate.IsIntensitySupported;
+            bool supportsDuration = candidate.IsPlayDurationSupported;
             controller = candidate;
             click = feedback;
+            availableFeedback = supported;
+            intensitySupported = supportsIntensity;
+            durationSupported = supportsDuration;
+            SelectTexture();
             ConnectionStage = "Connected";
             State = "Pen connected. Your changes apply immediately.";
             Changed?.Invoke();
@@ -139,6 +165,7 @@ internal sealed class Haptics : IDisposable
         }
 
         shortcutPattern = PenShortcutRecognizer.IsShortcut(gesture);
+        sequenceIntensity = Intensity;
         var now = Environment.TickCount64;
         var pattern = effect.Pattern();
         int previousOffset = 0;
@@ -153,8 +180,9 @@ internal sealed class Haptics : IDisposable
         Tick();
     }
 
-    public void SetDrawing(bool active)
+    public void SetDrawing(bool active, double? pressure = null)
     {
+        drawingPressure = pressure;
         active = active && Connected && Intensity > 0 && preferences.DrawingStrength > 0;
         var now = Environment.TickCount64;
         bool previouslyActive = drawingClock.IsRequested(now);
@@ -174,7 +202,7 @@ internal sealed class Haptics : IDisposable
         lastSendRouted = desktop.TrySend(controller, feedback.Waveform, Math.Clamp(strength, 0, 1));
         if (!lastSendRouted)
         {
-            if (controller.IsIntensitySupported)
+            if (intensitySupported)
                 controller.SendHapticFeedback(feedback, Math.Clamp(strength, 0, 1));
             else
                 controller.SendHapticFeedback(feedback);
@@ -185,9 +213,9 @@ internal sealed class Haptics : IDisposable
 
     private void StopPlayback()
     {
-        if (!playing && !drawingPlaying)
+        if (!playing && !drawingPlaying && !continuousPlaying)
             return;
-        playing = drawingPlaying = false;
+        playing = drawingPlaying = continuousPlaying = false;
         if (!lastSendRouted || !desktop.TryStop())
             controller?.StopFeedback();
     }
@@ -206,7 +234,7 @@ internal sealed class Haptics : IDisposable
             }
 
             bool drawingRequested = drawingClock.IsRequested(now);
-            if (drawingPlaying && !drawingRequested)
+            if ((drawingPlaying || continuousPlaying) && !drawingRequested)
                 StopPlayback();
             // Click is finite. Let it finish naturally rather than sending a
             // stop that can overtake a delayed Bluetooth effect. The deadline
@@ -223,7 +251,7 @@ internal sealed class Haptics : IDisposable
                 }
 
                 StopPlayback();
-                Send(click, Intensity * pulse.Strength);
+                Send(click, sequenceIntensity * pulse.Strength);
                 playing = true;
                 // Preserve spacing after a late timer or a slow device call.
                 // Never catch up overdue pulses on consecutive timer ticks.
@@ -234,22 +262,38 @@ internal sealed class Haptics : IDisposable
                 stopAt = sentAt + Math.Clamp((int)click.Duration.TotalMilliseconds + CompletionGraceMilliseconds, MinimumCompletionMilliseconds, MaximumCompletionMilliseconds);
             }
 
-            if (pulses.Count == 0 && !playing && click != null && drawingClock.TryTakePulse(now))
+            if (pulses.Count == 0 && !playing && drawingRequested && texture != null && (!continuousPlaying || now >= nextTextureAt))
             {
-                Send(click, Intensity * preferences.DrawingStrength);
+                if (TryTexture(texture, DrawingIntensity()))
+                {
+                    continuousPlaying = true;
+                    nextTextureAt = Environment.TickCount64 + TextureRefreshMilliseconds;
+                    DrawingPulses++;
+                }
+                else
+                {
+                    StopPlayback();
+                    texture = null;
+                    TextureStatus = "Texture playback was declined; using pulses until settings change or reconnect.";
+                }
+            }
+
+            if (pulses.Count == 0 && !playing && texture == null && click != null && drawingClock.TryTakePulse(now))
+            {
+                Send(click, DrawingIntensity());
                 drawingPlaying = true;
                 DrawingPulses++;
                 stopAt = now + Math.Clamp((int)click.Duration.TotalMilliseconds + CompletionGraceMilliseconds, MinimumCompletionMilliseconds, MaximumCompletionMilliseconds);
             }
 
-            if (pulses.Count == 0 && !playing && !drawingPlaying && !drawingRequested)
+            if (pulses.Count == 0 && !playing && !drawingPlaying && !continuousPlaying && !drawingRequested)
                 timer.Stop();
         }
         catch (Exception e)
         {
             pulses.Clear();
             timer.Stop();
-            playing = drawingPlaying = false;
+            playing = drawingPlaying = continuousPlaying = false;
             drawingClock.Reset();
             desktop.TryStop();
             try
@@ -262,6 +306,9 @@ internal sealed class Haptics : IDisposable
 
             controller = null;
             click = null;
+            texture = null;
+            availableFeedback = [];
+            intensitySupported = durationSupported = false;
             State = "Pen connection lost: " + e.Message;
             Changed?.Invoke();
         }
@@ -293,7 +340,7 @@ internal sealed class Haptics : IDisposable
         }
 
         drawingClock.Reset();
-        if (drawingPlaying)
+        if (drawingPlaying || continuousPlaying)
         {
             try
             {
@@ -310,7 +357,12 @@ internal sealed class Haptics : IDisposable
         Cancel();
         controller = null;
         click = null;
-        State = "Touch the blue pad with your pen to reconnect.";
+        texture = null;
+        availableFeedback = [];
+        intensitySupported = durationSupported = false;
+        desktop.Dispose();
+        desktop = new DesktopHaptics();
+        State = "Waiting to reconnect. Use the pen, or touch the blue pad.";
         Changed?.Invoke();
     }
 
@@ -319,5 +371,48 @@ internal sealed class Haptics : IDisposable
         Cancel();
         timer.Dispose();
         desktop.Dispose();
+    }
+
+    private double DrawingIntensity() => Intensity * preferences.DrawingStrength * PressureResponse.Multiplier(drawingPressure, preferences.PressureFeedback && IntensitySupported, preferences.PressureSensitivity, preferences.MinimumPressureStrength);
+    private static ushort TextureWaveform(DrawingTexture kind) => kind switch
+    {
+        DrawingTexture.Ink => KnownSimpleHapticsControllerWaveforms.InkContinuous,
+        DrawingTexture.Pencil => KnownSimpleHapticsControllerWaveforms.PencilContinuous,
+        DrawingTexture.Brush => KnownSimpleHapticsControllerWaveforms.BrushContinuous,
+        DrawingTexture.Marker => KnownSimpleHapticsControllerWaveforms.MarkerContinuous,
+        DrawingTexture.Eraser => KnownSimpleHapticsControllerWaveforms.EraserContinuous,
+        _ => KnownSimpleHapticsControllerWaveforms.Click
+    };
+    private void SelectTexture()
+    {
+        nextTextureAt = 0;
+        texture = preferences.DrawingTexture == DrawingTexture.Pulses ? null : availableFeedback.FirstOrDefault(f => f.Waveform == TextureWaveform(preferences.DrawingTexture));
+        TextureStatus = preferences.DrawingTexture == DrawingTexture.Pulses ? "Pulse feedback" : texture != null ? preferences.DrawingTexture + " texture (experimental)" : "Requested texture unavailable; using pulses.";
+    }
+
+    private bool TryTexture(SimpleHapticsControllerFeedback feedback, double intensity)
+    {
+        if (controller == null)
+            return false;
+        // Never send an unbounded continuous waveform. Short requests expire even
+        // if the app stalls; normal contact loss also sends an explicit stop.
+        bool routed = desktop.TrySend(controller, feedback.Waveform, Math.Clamp(intensity, 0, 1), TextureDurationMilliseconds);
+        if (!routed)
+        {
+            if (!durationSupported)
+                return false;
+            try
+            {
+                controller.SendHapticFeedbackForDuration(feedback, Math.Clamp(intensity, 0, 1), TimeSpan.FromMilliseconds(TextureDurationMilliseconds));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        lastSendRouted = routed;
+        Commands++;
+        return true;
     }
 }

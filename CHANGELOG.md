@@ -1,5 +1,22 @@
 # Changes
 
+## 0.9.1 - 10 November 2026
+
+- Default overall, drawing and action strengths to 100%.
+- Keep saved custom strengths, pulse timing and alternating patterns intact.
+
+## 0.9.0 - 10 November 2026
+
+- Add named profiles with import/export and automatic per-app selection.
+- Add reconnect backoff, quick retries on fresh pen input, and sleep/lock recovery.
+- Add configurable pause shortcuts and timed tray pauses.
+- Add a three-step calibration flow with previews and explicit Apply/Cancel.
+- Add supported drawing textures with bounded playback and pulse fallback.
+- Add optional pressure-responsive drawing with adjustable sensitivity and minimum strength.
+- Add a troubleshooting page and copyable local report.
+- Preserve existing feedback settings and keep experimental modes opt-in.
+- Add regression and isolated Windows control tests for the new features.
+
 ## 0.8.2 - 10 November 2026
 
 - Minimise to the tray from the window button, title-bar minimise or X; keep Exit PenPulse as the explicit way to stop.

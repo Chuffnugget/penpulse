@@ -32,6 +32,7 @@ packages/
 .nuget/
 .codex/
 .tools/
+.task/
 
 # IDE and user-specific settings
 .vs/

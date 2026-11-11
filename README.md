@@ -6,12 +6,12 @@ PenPulse adds feedback for taps, holds, right-clicks, drawing, dragging, erasing
 and the pen's top button. It runs in the system tray while you use other apps.
 
 **Experimental.** Earlier builds were tested with a Surface Slim Pen 2 on a
-Surface Pro 9. Version 0.8.2 needs a fresh physical pen check; other combinations
+Surface Pro 9. Version 0.9.1 needs a fresh physical pen check; other combinations
 of pens, PCs and drivers remain unverified.
 
 ## Install
 
-Use `PenPulse-0.8.2-Setup-x64.exe`, or extract the portable ZIP into a writable
+Use `PenPulse-0.9.1-Setup-x64.exe`, or extract the portable ZIP into a writable
 folder and open `PenPulse.exe`. Windows 11 and a compatible haptic pen are
 required. The .NET runtime is included. The installer is currently unsigned.
 
@@ -25,7 +25,9 @@ settings; startup stays off unless you enable it.
 2. Open PenPulse and touch the blue pad with the writing tip.
 3. Once connected, choose **Minimise to tray** and try the pen in another app.
 
-After sleep or a connection loss, touch the pad again if feedback stops.
+PenPulse retries automatically after sleep or connection loss, with faster retries
+when pen input arrives. Touch the pad again if Windows still needs a direct pen
+contact. You can turn automatic retry off in Tools.
 
 ## Startup and the system tray
 
@@ -48,10 +50,32 @@ After sleep or a connection loss, touch the pad again if feedback stops.
 - **General:** overall strength, presets, gesture timing, excluded apps and startup.
   Exclusions take process names separated by semicolons, such as `OneNote;Photoshop`.
 
-Changes save automatically. Overall strength scales each action's strength;
-set both to 100% for maximum intensity. Presets preserve your custom click patterns.
+Changes save automatically. Overall, drawing and action strengths default to 100%.
+Overall strength scales each action's strength. Saved custom values are preserved
+when upgrading. Presets preserve your custom click patterns.
 Top-button double-click defaults to two pulses 350 ms apart, which felt distinct
 on the tested pen. Saved settings keep their existing values.
+
+## Profiles, shortcuts and calibration
+
+- **Profiles:** save your current default settings as a named profile, or import
+  and export profiles as JSON. Use **Use as default** to load one into the controls;
+  **Replace saved** updates the selected snapshot after you edit the defaults.
+- **App profiles:** assign an executable name such as `OneNote.exe` to a saved
+  profile. It takes effect when that app is in front. Unassigned apps use your
+  defaults, and global exclusions always apply.
+- **Quick pause:** choose a timed pause in the tray menu, or enable a configurable
+  pause/resume keyboard shortcut in Tools. Shortcut conflicts are reported there.
+- **Calibration:** Tools walks you through strength, double-click spacing and
+  supported drawing textures. Preview changes before applying them to your defaults.
+- **Troubleshooting:** Tools explains the current connection, input, pause,
+  exclusion and capability state. You can copy a report; nothing is uploaded.
+
+Drawing settings also offer experimental **Ink, Pencil, Brush, Marker and Eraser**
+textures and optional **pressure-responsive strength**. Textures use short,
+bounded playback requests and fall back to clicks when unavailable or rejected.
+Pressure affects drawing only; missing pressure or intensity support uses normal
+strength. Existing settings keep pulse mode and pressure feedback off.
 
 ## Compatibility
 
@@ -69,8 +93,9 @@ and [Surface pen compatibility](https://support.microsoft.com/en-us/surface/acce
 The top-button release workaround currently recognises the Slim Pen 2 specifically.
 
 PenPulse runs in your signed-in desktop session, excluding the lock screen and
-secure UAC desktop. Drawing feedback uses repeated clicks; it cannot tell whether
-an app is drawing, selecting text or dragging an object. See [testing and known limits](docs/TESTING.md).
+secure UAC desktop. The default drawing mode uses repeated clicks; PenPulse cannot
+tell whether an app is drawing, selecting text or dragging an object. See
+[testing and known limits](docs/TESTING.md).
 
 ## Run from source
 
@@ -84,12 +109,20 @@ The launcher builds the current version if needed. Use `-Rebuild` after source e
 It allows PowerShell scripts for that launch only, without changing your saved policy.
 Build, test, installer and release commands are in the development guide.
 
+If you prefer `task run`, install [Task](https://taskfile.dev/docs/installation)
+once with `winget install --id Task.Task --exact --source winget --scope user`,
+then restart your terminal. The included `Taskfile.yml` provides `task run`,
+`task build`, `task test`, `task build-installer` and `task release`.
+Use `task --list` for every command. `run.cmd` works without Task.
+
 ## Local data
 
 PenPulse makes no network requests. Settings and connection status are stored in
-`data` beside the executable. It does not record handwriting, typed text or screen
-contents. To move settings between copies, exit PenPulse and copy
-`data/settings.json` into the new copy's `data` folder.
+`data` beside the executable (`settings.json`, `profiles.json` and `desktop.json`).
+It does not record handwriting, typed text or screen contents. To move preferences
+and profiles between copies, exit PenPulse and copy those three JSON files, when
+present, into the new copy's `data` folder. The Windows startup registration belongs
+to each executable path; enable it again in the new copy if you move the app.
 
 ## Licence
 

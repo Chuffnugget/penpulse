@@ -278,8 +278,26 @@ internal sealed class RawPenInput : IDisposable
                 y = p.Y;
             }
 
-            sample = PenSample.FromSwitches(tipContact, erase, inverted, barrel, !hasRange || inRange, x, y);
+            sample = PenSample.FromSwitches(tipContact, erase, inverted, barrel, !hasRange || inRange, x, y) with
+            {
+                Pressure = Pressure(report)
+            };
             return true;
+        }
+
+        private double? Pressure(byte[] report)
+        {
+            // Digitizer Tip Pressure (0x30) is distinct from Generic Desktop X (also 0x30).
+            // Missing pressure stays unknown; the mouse fallback must not invent a value.
+            foreach (var cap in values)
+            {
+                if (cap.Page != 0x0d || !cap.Contains(0x30) || (cap.ReportId != 0 && cap.ReportId != report[0]))
+                    continue;
+                if (Native.HidP_GetUsageValue(0, 0x0d, cap.Link, 0x30, out uint value, data, report, (uint)report.Length) == Native.HID_OK)
+                    return PressureResponse.Normalize(value, cap.LogicalMin, cap.LogicalMax, cap.BitSize);
+            }
+
+            return null;
         }
 
         private bool Button(byte[] report, ushort usage, out bool pressed)

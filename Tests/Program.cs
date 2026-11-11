@@ -283,7 +283,7 @@ Check("Old saved preferences retain strength and switches", () =>
     Equal(s.Intensity, 1d);
     Equal(s.DoubleTap.Enabled, false);
     Equal(s.Eraser.Enabled, false);
-    Equal(s.DrawingStrength, .6);
+    Equal(s.DrawingStrength, 1d);
     Equal(s.DrawingIntervalMilliseconds, 85);
     Equal(s.SchemaVersion, 1);
 });
@@ -303,20 +303,24 @@ Check("Custom effects survive a settings round-trip independently", () =>
     Equal(copy.DrawingStrength, 1d);
     Equal(copy.Tap.Strength, .2);
 });
-Check("Default patterns retain confirmed timing and strength", () =>
+Check("Default patterns use full strength with distinct timing", () =>
 {
     var s = new Settings();
     s.Normalize();
+    Equal(s.Intensity, 1d);
+    Equal(s.DrawingStrength, 1d);
+    foreach (var gesture in Enum.GetValues<Gesture>())
+        Equal(s.For(gesture).Strength, 1d);
     var h = s.Hold.Pattern();
     Equal(h.Length, 2);
     Equal(h[1].Offset, 150);
     Equal(h[0].Strength, 1d);
     var r = s.RightClick.Pattern();
     Equal(r[2].Offset, 170);
-    Equal(r[2].Strength, .9);
+    Equal(r[2].Strength, 1d);
     var e = s.Eraser.Pattern();
-    Equal(e[0].Strength, .5);
-    Equal(e[1].Strength, .8);
+    Equal(e[0].Strength, .625);
+    Equal(e[1].Strength, 1d);
 });
 Check("Invalid configuration is bounded before playback", () =>
 {
@@ -332,7 +336,7 @@ Check("Invalid configuration is bounded before playback", () =>
     s.Hold.GapMilliseconds = -1;
     s.Hold.Strength = -1;
     s.Normalize();
-    Equal(s.Intensity, .7);
+    Equal(s.Intensity, 1d);
     Equal(s.DrawingStrength, 1d);
     Equal(s.DrawingIntervalMilliseconds, 50);
     Equal(s.DrawingStopMilliseconds, 300);
@@ -918,5 +922,6 @@ Check("Fresh profiles use verified spacing without overwriting saved preferences
     old.Normalize();
     Equal(old.TopDoubleClick.GapMilliseconds, 275);
 });
+FeatureTests.Run(Check);
 Console.WriteLine($"\n{tests - failures.Count}/{tests} checks passed.");
 Environment.ExitCode = failures.Count == 0 ? 0 : 1;

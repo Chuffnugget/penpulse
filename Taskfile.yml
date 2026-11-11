@@ -1,0 +1,84 @@
+version: '3'
+
+vars:
+  SCRIPT: cmd.exe /d /c 'scripts\run-script.cmd'
+
+tasks:
+  default:
+    desc: List available commands
+    cmds:
+      - '"{{.TASK_EXE}}" --list'
+
+  run:
+    desc: Open PenPulse
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/run.ps1 {{.CLI_ARGS}}'
+
+  build:
+    desc: Build PenPulse
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/build.ps1 {{.CLI_ARGS}}'
+
+  test:
+    desc: Run regression and Windows control checks
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/test.ps1 {{.CLI_ARGS}}'
+
+  test-windows:
+    desc: Run isolated Windows control checks
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/test-windows.ps1 {{.CLI_ARGS}}'
+
+  publish:
+    desc: Publish the self-contained app
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/publish.ps1 {{.CLI_ARGS}}'
+
+  build-installer:
+    desc: Test and build the installer
+    aliases: [installer]
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/build-installer.ps1 {{.CLI_ARGS}}'
+
+  test-installer:
+    desc: Test the installer with an isolated identity
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/test-installer.ps1 {{.CLI_ARGS}}'
+
+  test-package:
+    desc: Check published versions and licences
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/test-package.ps1 {{.CLI_ARGS}}'
+
+  test-packaging:
+    desc: Check rejection of damaged packages
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/test-packaging.ps1 {{.CLI_ARGS}}'
+
+  release:
+    desc: Create the installer, portable ZIP and checksums
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/release.ps1 {{.CLI_ARGS}}'
+
+  setup:
+    desc: Download and verify local build tools
+    aliases: [setup-tools]
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/setup-tools.ps1 {{.CLI_ARGS}}'
+
+  clean:
+    desc: Remove generated output while preserving tools and personal data
+    platforms: [windows]
+    cmds:
+      - '{{.SCRIPT}} scripts/clean.ps1 {{.CLI_ARGS}}'

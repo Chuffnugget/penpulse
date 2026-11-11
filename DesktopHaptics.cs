@@ -22,6 +22,7 @@ internal sealed class DesktopHaptics : IDisposable
         public const int RecentDeviceType = 7;
         public const int RecentController = 8;
         public const int SendFeedback = 10;
+        public const int SendFeedbackForDuration = 11;
         public const int StopFeedback = 13;
         public const int SetControllerOverride = 14;
         public const int ClearControllerOverride = 15;
@@ -70,6 +71,10 @@ internal sealed class DesktopHaptics : IDisposable
     private delegate int ClearCall(nint self, long token);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int SendCall(nint self, ushort waveform, ushort fallback, double intensity, out byte sent);
+    // TimeSpan crosses the WinRT ABI as a signed count of 100 ns ticks.
+    // Signature/slot: microsoft/windows-rs, Windows/Devices/Haptics, IInputHapticsManager_Vtbl.
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate int DurationCall(nint self, ushort waveform, ushort fallback, double intensity, long duration, out byte sent);
     [DllImport("combase", CharSet = CharSet.Unicode)]
     private static extern int WindowsCreateString(string value, uint length, out nint result);
     [DllImport("combase")]
@@ -158,7 +163,7 @@ internal sealed class DesktopHaptics : IDisposable
 
     // Raw input can arrive when this thread does not own pointer focus. Provide
     // the pen controller explicitly for just this request, then clear the override.
-    public bool TrySend(SimpleHapticsController controller, ushort waveform, double intensity)
+    public bool TrySend(SimpleHapticsController controller, ushort waveform, double intensity, int durationMilliseconds = 0)
     {
         if (manager == 0)
         {
@@ -174,7 +179,11 @@ internal sealed class DesktopHaptics : IDisposable
             abi = WinRT.MarshalInspectable<SimpleHapticsController>.FromManaged(controller);
             Marshal.ThrowExceptionForHR(Slot<OverrideCall>(manager, ManagerSlots.SetControllerOverride)(manager, PenDeviceType, abi, out token));
             overridden = true;
-            Marshal.ThrowExceptionForHR(Slot<SendCall>(manager, ManagerSlots.SendFeedback)(manager, waveform, 0, intensity, out var sent));
+            byte sent;
+            if (durationMilliseconds > 0)
+                Marshal.ThrowExceptionForHR(Slot<DurationCall>(manager, ManagerSlots.SendFeedbackForDuration)(manager, waveform, waveform, intensity, TimeSpan.FromMilliseconds(Math.Clamp(durationMilliseconds, 1, 250)).Ticks, out sent));
+            else
+                Marshal.ThrowExceptionForHR(Slot<SendCall>(manager, ManagerSlots.SendFeedback)(manager, waveform, 0, intensity, out sent));
             if (sent != 0)
             {
                 RoutedCommands++;

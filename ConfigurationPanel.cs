@@ -26,6 +26,9 @@ internal sealed class ConfigurationPanel : TabControl
     private TrackBar drawingStrength = null!, drawingSpeed = null!, masterStrength = null!, effectStrength = null!;
     private CheckBox drawingEnabled = null!, movingOnly = null!, effectEnabled = null!, alternate = null!, systemDoubleTap = null!;
     private NumericUpDown stopDelay = null!, movement = null!, pulseCount = null!, pulseGap = null!, holdDelay = null!, doubleTapDelay = null!;
+    private NumericUpDown pressureSensitivity = null!, pressureMinimum = null!;
+    private CheckBox pressureEnabled = null!;
+    private ComboBox textureChoice = null!;
     private EffectSettings Current => settings.For(actions[Math.Max(0, actionList.SelectedIndex)]);
 
     public ConfigurationPanel(Settings settings, Action changed, Action<Gesture> preview, CheckBox startup, int windowsDoubleTap)
@@ -46,6 +49,29 @@ internal sealed class ConfigurationPanel : TabControl
         movement = Number(ds, "Movement needed", 1, 10, (decimal)settings.DrawingMovementThreshold, "pixels · lower is more sensitive", v => settings.DrawingMovementThreshold = (double)v);
         stopDelay = Number(ds, "Stop when still for", 50, 300, settings.DrawingStopMilliseconds, "milliseconds", v => settings.DrawingStopMilliseconds = (int)v, 10);
         TextRow(ds, "Lifting the pen always stops movement feedback. Turn off “Only vibrate while moving” to also feel pulses while holding the tip still.", 52);
+        TextRow(ds, "Drawing texture (experimental; unsupported textures fall back to pulses)", 42);
+        textureChoice = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Dock = DockStyle.Fill,
+            AccessibleName = "Drawing texture"
+        };
+        textureChoice.Items.AddRange(Enum.GetValues<DrawingTexture>().Cast<object>().ToArray());
+        textureChoice.SelectedItem = settings.DrawingTexture;
+        textureChoice.SelectedIndexChanged += (_, _) =>
+        {
+            if (!loading && textureChoice.SelectedItem is DrawingTexture texture)
+            {
+                settings.DrawingTexture = texture;
+                Commit();
+            }
+        };
+        Add(ds, textureChoice, 36);
+        pressureEnabled = Check(ds, "Vary drawing strength with pen pressure", settings.PressureFeedback, v => settings.PressureFeedback = v);
+        pressureSensitivity = Number(ds, "Pressure sensitivity", .25m, 3, (decimal)settings.PressureSensitivity, "higher feels stronger sooner", v => settings.PressureSensitivity = (double)v, .25m);
+        pressureSensitivity.DecimalPlaces = 2;
+        pressureMinimum = Number(ds, "Light-touch strength", 0, 100, (decimal)Math.Round(settings.MinimumPressureStrength * 100), "% of drawing strength", v => settings.MinimumPressureStrength = (double)v / 100, 5);
+        TextRow(ds, "Pressure affects drawing only. If pressure or intensity control is unavailable, normal drawing strength is used. Tools shows the current capabilities.", 60);
         var effects = Page("Taps, holds & clicks");
         var grid = new TableLayoutPanel
         {
@@ -252,7 +278,7 @@ internal sealed class ConfigurationPanel : TabControl
         return slider;
     }
 
-    private NumericUpDown Number(TableLayoutPanel stack, string title, int min, int max, decimal value, string unit, Action<decimal> update, int increment = 1, int labelWidth = 175)
+    private NumericUpDown Number(TableLayoutPanel stack, string title, decimal min, decimal max, decimal value, string unit, Action<decimal> update, decimal increment = 1, int labelWidth = 175)
     {
         var row = new TableLayoutPanel
         {
@@ -301,6 +327,26 @@ internal sealed class ConfigurationPanel : TabControl
         drawingStrength.Value = (int)Math.Round(settings.DrawingStrength * 100);
         drawingSpeed.Value = Math.Clamp((int)Math.Round(1000d / settings.DrawingIntervalMilliseconds), 2, 20);
         masterStrength.Value = (int)Math.Round(settings.Intensity * 100);
+        loading = false;
+    }
+
+    public void Reload()
+    {
+        RefreshValues();
+        loading = true;
+        drawingEnabled.Checked = settings.DrawingFeedback;
+        movingOnly.Checked = settings.DrawingOnlyWhenMoving;
+        movement.Value = (decimal)settings.DrawingMovementThreshold;
+        stopDelay.Value = settings.DrawingStopMilliseconds;
+        holdDelay.Value = settings.HoldMilliseconds;
+        systemDoubleTap.Checked = settings.DoubleTapMilliseconds == 0;
+        doubleTapDelay.Value = settings.DoubleTapMilliseconds == 0 ? Math.Clamp((int)Native.GetDoubleClickTime(), 150, 1000) : settings.DoubleTapMilliseconds;
+        doubleTapDelay.Enabled = !systemDoubleTap.Checked;
+        textureChoice.SelectedItem = settings.DrawingTexture;
+        pressureEnabled.Checked = settings.PressureFeedback;
+        pressureSensitivity.Value = (decimal)settings.PressureSensitivity;
+        pressureMinimum.Value = (decimal)Math.Round(settings.MinimumPressureStrength * 100);
+        LoadEffect();
         loading = false;
     }
 

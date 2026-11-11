@@ -14,7 +14,7 @@ internal enum Gesture
     TopHold
 }
 
-internal readonly record struct PenSample(bool Contact, bool Barrel, bool Eraser, bool InRange, double X, double Y)
+internal readonly record struct PenSample(bool Contact, bool Barrel, bool Eraser, bool InRange, double X, double Y, double? Pressure = null)
 {
     // HID Eraser (0x45) is contact at the tail end; Invert (0x3c) can also
     // be set during hover. Erasing need not set the writing Tip Switch (0x42).

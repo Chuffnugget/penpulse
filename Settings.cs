@@ -8,17 +8,24 @@ internal sealed class Settings
     {
         get; set;
     }
-    public double Intensity { get; set; } = .7;
+    public double Intensity { get; set; } = 1;
     public int HoldMilliseconds { get; set; } = 550;
     public int DoubleTapMilliseconds
     {
         get; set;
     } // Zero follows the Windows setting.
-    public double DrawingStrength { get; set; } = .6;
+    public double DrawingStrength { get; set; } = 1;
     public int DrawingIntervalMilliseconds { get; set; } = 85;
     public int DrawingStopMilliseconds { get; set; } = 140;
     public double DrawingMovementThreshold { get; set; } = 2;
     public bool DrawingOnlyWhenMoving { get; set; } = true;
+    public DrawingTexture DrawingTexture { get; set; } = DrawingTexture.Pulses;
+    public bool PressureFeedback
+    {
+        get; set;
+    }
+    public double PressureSensitivity { get; set; } = 1;
+    public double MinimumPressureStrength { get; set; } = .15;
     public bool DragFeedback { get; set; } = false;
     public bool DrawingFeedback { get; set; } = true;
     public bool DoubleTapFeedback { get; set; } = true;
@@ -95,19 +102,19 @@ internal sealed class Settings
         },
         Gesture.RightClick => new()
         {
-            Strength = .9,
+            Strength = 1,
             PulseCount = 3,
             GapMilliseconds = 85
         },
         Gesture.DoubleTap => new()
         {
-            Strength = .8,
+            Strength = 1,
             PulseCount = 2,
             GapMilliseconds = 65
         },
         Gesture.Eraser => new()
         {
-            Strength = .8,
+            Strength = 1,
             PulseCount = 4,
             GapMilliseconds = 110,
             AlternatePulses = true
@@ -115,7 +122,7 @@ internal sealed class Settings
         Gesture.Drag => new()
         {
             Enabled = false,
-            Strength = .3
+            Strength = 1
         },
         Gesture.TopClick => new()
         {
@@ -137,11 +144,11 @@ internal sealed class Settings
         Gesture.Release => new()
         {
             Enabled = false,
-            Strength = .25
+            Strength = 1
         },
         _ => new()
         {
-            Strength = .6
+            Strength = 1
         }
     };
     public void Normalize()
@@ -164,14 +171,18 @@ internal sealed class Settings
             SchemaVersion = 1;
         }
 
-        Intensity = double.IsFinite(Intensity) ? Math.Clamp(Intensity, 0, 1) : .7;
+        Intensity = double.IsFinite(Intensity) ? Math.Clamp(Intensity, 0, 1) : 1;
         HoldMilliseconds = Math.Clamp(HoldMilliseconds, 250, 1500);
         if (DoubleTapMilliseconds != 0)
             DoubleTapMilliseconds = Math.Clamp(DoubleTapMilliseconds, 150, 1000);
-        DrawingStrength = double.IsFinite(DrawingStrength) ? Math.Clamp(DrawingStrength, 0, 1) : .6;
+        DrawingStrength = double.IsFinite(DrawingStrength) ? Math.Clamp(DrawingStrength, 0, 1) : 1;
         DrawingIntervalMilliseconds = Math.Clamp(DrawingIntervalMilliseconds, 50, 500);
         DrawingStopMilliseconds = Math.Clamp(DrawingStopMilliseconds, 50, 300);
         DrawingMovementThreshold = double.IsFinite(DrawingMovementThreshold) ? Math.Clamp(DrawingMovementThreshold, 1, 10) : 2;
+        if (!Enum.IsDefined(DrawingTexture))
+            DrawingTexture = DrawingTexture.Pulses;
+        PressureSensitivity = double.IsFinite(PressureSensitivity) ? Math.Clamp(PressureSensitivity, .25, 3) : 1;
+        MinimumPressureStrength = double.IsFinite(MinimumPressureStrength) ? Math.Clamp(MinimumPressureStrength, 0, 1) : .15;
         ExcludedApps ??= "";
         foreach (var g in Enum.GetValues<Gesture>())
             For(g).Normalize();
@@ -189,4 +200,32 @@ internal sealed class Settings
             _ => (.8, .6, 85)
         };
     }
+
+    public Settings CloneFeedback()
+    {
+        Normalize();
+        var clone = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(this))!;
+        clone.Normalize();
+        clone.ExcludedApps = "";
+        return clone;
+    }
+
+    public void CopyFeedbackFrom(Settings source)
+    {
+        var copy = source.CloneFeedback();
+        // Copy only instance feedback properties; exclusions stay local to the PC.
+        foreach (var property in typeof(Settings).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            if (property.CanRead && property.CanWrite && property.Name != nameof(ExcludedApps))
+                property.SetValue(this, property.GetValue(copy));
+    }
+}
+
+internal enum DrawingTexture
+{
+    Pulses,
+    Ink,
+    Pencil,
+    Brush,
+    Marker,
+    Eraser
 }

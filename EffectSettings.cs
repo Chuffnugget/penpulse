@@ -3,7 +3,7 @@ namespace PenPulse;
 internal sealed class EffectSettings
 {
     public bool Enabled { get; set; } = true;
-    public double Strength { get; set; } = .6;
+    public double Strength { get; set; } = 1;
     public int PulseCount { get; set; } = 1;
     public int GapMilliseconds { get; set; } = 85;
     public bool AlternatePulses
@@ -13,7 +13,7 @@ internal sealed class EffectSettings
 
     public void Normalize()
     {
-        Strength = double.IsFinite(Strength) ? Math.Clamp(Strength, 0, 1) : .6;
+        Strength = double.IsFinite(Strength) ? Math.Clamp(Strength, 0, 1) : 1;
         PulseCount = Math.Clamp(PulseCount, 1, 6);
         GapMilliseconds = Math.Clamp(GapMilliseconds, 50, 400);
     }

@@ -20,6 +20,33 @@ internal sealed class MainWindow : Form
     private StrokeMotion stroke => contact.Stroke;
 
     private readonly Settings settings = Settings.Load();
+    private Settings activeSettings;
+    private readonly ProfileLibrary profiles;
+    private readonly DesktopOptions desktopOptions;
+    private readonly FeaturePanels features;
+    private readonly PauseState pauseState = new();
+    private readonly ReconnectSchedule reconnectSchedule = new();
+    private ShortcutRegistration? pauseShortcut;
+    private bool paused => pauseState.IsPaused;
+
+    private bool sessionLocked, powerSuspended, calibrating;
+    private uint foregroundPid;
+    private string? foregroundProcess;
+    private string activeProfileId = "", activeProfileName = "Default settings", featureFault = "";
+    private double? lastPressure;
+    private bool pressureSeen;
+    private long previewUntil;
+    private readonly System.Windows.Forms.Timer runtimeTimer = new()
+    {
+        Interval = 200
+    };
+    private readonly System.Windows.Forms.Timer previewTimer = new()
+    {
+        Interval = 25
+    };
+    private static string ProfilesPath => Path.Combine(Settings.DataPath, "profiles.json");
+    private static string DesktopOptionsPath => Path.Combine(Settings.DataPath, "desktop.json");
+
     private RawPenInput? raw;
     private readonly Native.HookProc hookProc;
     private nint hook, selectedRawDevice;
@@ -36,7 +63,7 @@ internal sealed class MainWindow : Form
         Interval = 35
     };
     private readonly Queue<(int Message, Native.Point Point, long Time)> fallback = new();
-    private bool mouseContact, paused, shuttingDown, initializing = true;
+    private bool mouseContact, shuttingDown, initializing = true;
     private long recognized, lastStatusWrite, lastConnect = -10000, lastAutoConnect = -10000;
     private string lastGesture = "None yet", inputFault = "", saveFault = "";
     private long backgroundGestures, foregroundGestures, eraserGestures, ignoredEraserReports;
@@ -56,7 +83,26 @@ internal sealed class MainWindow : Form
     public event Action? ExitRequested;
     public MainWindow()
     {
-        haptics.PlaybackAllowed = () => !paused && !IsExcluded();
+        profiles = LocalJson.Load<ProfileLibrary>(ProfilesPath, out var profilesError);
+        try
+        {
+            profiles.Normalize();
+        }
+        catch (Exception e)
+        {
+            profiles = new ProfileLibrary();
+            profilesError = e.Message;
+        }
+
+        desktopOptions = LocalJson.Load<DesktopOptions>(DesktopOptionsPath, out var desktopError);
+        desktopOptions.Normalize();
+        featureFault = string.Join(" ", new[] { profilesError, desktopError }.Where(s => s.Length > 0));
+        activeSettings = settings;
+        haptics.PlaybackAllowed = () =>
+        {
+            UpdateActiveProfile();
+            return !paused && !sessionLocked && !powerSuspended && !IsExcluded() && (calibrating || ForegroundMatches());
+        };
         contact.Expired += () =>
         {
             mouseContact = false;
@@ -109,7 +155,17 @@ internal sealed class MainWindow : Form
         startupMenu.Checked = startWindows.Checked;
         startWindows.CheckedChanged += (_, _) => SetStartup(startWindows.Checked);
         settings.Normalize();
-        configuration = new ConfigurationPanel(settings, ApplyConfiguration, g => haptics.Play(g), startWindows, (int)Native.GetDoubleClickTime());
+        configuration = new ConfigurationPanel(settings, ApplyConfiguration, g =>
+        {
+            UpdateActiveProfile(true);
+            haptics.Play(g);
+        }, startWindows, (int)Native.GetDoubleClickTime());
+        features = new FeaturePanels(settings, profiles, desktopOptions, SaveProfiles, () =>
+        {
+            configuration.Reload();
+            ApplyConfiguration();
+        }, SaveDesktopOptions, GetDiagnosticSnapshot, Calibrate);
+        features.AddTo(configuration);
         layout.Controls.Add(configuration);
         live.Dock = DockStyle.Fill;
         live.Font = new Font("Segoe UI", 9);
@@ -163,6 +219,23 @@ internal sealed class MainWindow : Form
         menu.Items.Add("Open PenPulse", null, (_, _) => ShowSettings());
         pauseMenu = new ToolStripMenuItem("Pause feedback", null, (_, _) => TogglePause());
         menu.Items.Add(pauseMenu);
+        var timedPause = new ToolStripMenuItem("Pause for");
+        foreach (int minutes in new[]
+        {
+            5,
+            10,
+            15,
+            30,
+            60
+        }
+
+        )
+            timedPause.DropDownItems.Add(minutes + " minutes", null, (_, _) =>
+            {
+                pauseState.ForMinutes(Environment.TickCount64, minutes);
+                PauseChanged();
+            });
+        menu.Items.Add(timedPause);
         menu.Items.Add("Reconnect pen", null, (_, _) =>
         {
             ResetConnection();
@@ -189,6 +262,8 @@ internal sealed class MainWindow : Form
         haptics.Changed += UpdateStatus;
         gestures.Recognized += OnGesture;
         _ = Handle;
+        pauseShortcut = new ShortcutRegistration(Handle);
+        pauseShortcut.Apply(desktopOptions);
         try
         {
             raw = new RawPenInput(Handle);
@@ -218,8 +293,26 @@ internal sealed class MainWindow : Form
                 holdTimer.Stop();
         };
         fallbackTimer.Tick += (_, _) => DrainFallback();
-        statusTimer.Tick += (_, _) => UpdateStatus();
+        statusTimer.Tick += (_, _) =>
+        {
+            TryReconnect();
+            UpdateStatus();
+        };
         statusTimer.Start();
+        runtimeTimer.Tick += (_, _) =>
+        {
+            if (pauseState.Tick(Environment.TickCount64))
+                PauseChanged();
+            UpdateActiveProfile();
+        };
+        runtimeTimer.Start();
+        previewTimer.Tick += (_, _) =>
+        {
+            if (!calibrating || paused || Environment.TickCount64 >= previewUntil)
+                StopCalibrationPreview();
+            else
+                haptics.SetDrawing(true, .6);
+        };
         SystemEvents.SessionSwitch += SessionChanged;
         SystemEvents.PowerModeChanged += PowerChanged;
         // Keep the message loop and input listeners alive when the window is hidden.
@@ -241,13 +334,16 @@ internal sealed class MainWindow : Form
         UpdateStatus();
     }
 
-    private void Connect(uint id, bool playConnectionEffect = true)
+    private void Connect(uint id, bool playConnectionEffect = true, bool manual = false)
     {
-        if (haptics.Connected || paused)
+        if (haptics.Connected || paused || sessionLocked || powerSuspended)
             return;
         var now = Environment.TickCount64;
         if (id == 0)
         {
+            bool freshInput = raw != null && now - raw.LastReportAt < 500;
+            if (!manual && (!desktopOptions.AutoReconnect || !reconnectSchedule.TryTake(now, freshInput)))
+                return;
             if (now - lastAutoConnect < AutomaticReconnectMilliseconds)
                 return;
             lastAutoConnect = now;
@@ -261,6 +357,8 @@ internal sealed class MainWindow : Form
 
         if (haptics.Connect(id))
         {
+            reconnectSchedule.Reset(now);
+            UpdateActiveProfile();
             // Associate only recent raw input with the controller we just acquired.
             if (raw != null && Environment.TickCount64 - raw.LastReportAt < DeviceAssociationMilliseconds)
                 selectedRawDevice = raw.LastDevice;
@@ -271,10 +369,15 @@ internal sealed class MainWindow : Form
 
     private void OnRawSample(nint device, PenSample sample)
     {
+        if (sample.Pressure.HasValue)
+            pressureSeen = true;
+        if (selectedRawDevice == 0 || selectedRawDevice == device)
+            lastPressure = sample.Contact ? sample.Pressure : null;
         if (!haptics.Connected && !paused && sample.InRange)
-            Connect(0);
-        if (!haptics.Connected || paused)
+            Connect(0, false);
+        if (!haptics.Connected || paused || sessionLocked || powerSuspended || calibrating)
             return;
+        UpdateActiveProfile();
         if (selectedRawDevice == 0)
             selectedRawDevice = device;
         if (selectedRawDevice != device)
@@ -297,7 +400,8 @@ internal sealed class MainWindow : Form
 
     private void OnShortcut(Gesture gesture)
     {
-        if (paused || IsExcluded() || !settings.For(gesture).Enabled)
+        UpdateActiveProfile();
+        if (paused || calibrating || sessionLocked || powerSuspended || IsExcluded() || !activeSettings.For(gesture).Enabled)
             return;
         if (!haptics.Connected)
             Connect(0, false);
@@ -333,10 +437,11 @@ internal sealed class MainWindow : Form
     private void DrainFallback()
     {
         var now = Environment.TickCount64;
+        UpdateActiveProfile();
         while (fallback.TryPeek(out var pending) && now - pending.Time >= MouseFallbackDelayMilliseconds)
         {
             fallback.Dequeue();
-            if (paused || !haptics.Connected)
+            if (paused || calibrating || sessionLocked || powerSuspended || !haptics.Connected)
                 continue;
             var rawRecent = raw != null && now - raw.LastReportAt < RawInputPriorityMilliseconds;
             if (pending.Message == 0x204)
@@ -353,6 +458,7 @@ internal sealed class MainWindow : Form
                 mouseContact = false;
             if (pending.Message is 0x201 or 0x202 || pending.Message == 0x200 && mouseContact)
             {
+                lastPressure = null;
                 var sample = new PenSample(mouseContact, false, false, true, pending.Point.X, pending.Point.Y);
                 contact.Feed(sample, now, raw: false, newContact: pending.Message == 0x201);
                 mouseContact = gestures.Contact;
@@ -368,25 +474,21 @@ internal sealed class MainWindow : Form
             fallbackTimer.Stop();
     }
 
-    private void UpdateDrawing(long now) => haptics.SetDrawing(settings.DrawingFeedback && !paused && (settings.DrawingOnlyWhenMoving ? stroke.IsMoving(now) : stroke.IsContactRecent(now)) && !IsExcluded());
+    private void UpdateDrawing(long now) => haptics.SetDrawing(activeSettings.DrawingFeedback && !paused && !sessionLocked && !powerSuspended && !calibrating && (activeSettings.DrawingOnlyWhenMoving ? stroke.IsMoving(now) : stroke.IsContactRecent(now)) && !IsExcluded(), lastPressure);
     private void ApplyConfiguration()
     {
         settings.Normalize();
-        haptics.Configure(settings);
-        gestures.HoldMilliseconds = settings.HoldMilliseconds;
-        gestures.DoubleTapMilliseconds = settings.DoubleTapMilliseconds == 0 ? (int)Native.GetDoubleClickTime() : settings.DoubleTapMilliseconds;
-        stroke.MovementThreshold = settings.DrawingMovementThreshold * DeviceDpi / 96d;
-        stroke.IdleMilliseconds = settings.DrawingStopMilliseconds;
+        UpdateActiveProfile(true);
         SaveSettings();
     }
 
     private void OnGesture(Gesture gesture)
     {
-        if (paused || IsExcluded())
+        if (paused || calibrating || sessionLocked || powerSuspended || IsExcluded())
             return;
-        if (gesture == Gesture.DoubleTap && !settings.DoubleTap.Enabled)
+        if (gesture == Gesture.DoubleTap && !activeSettings.DoubleTap.Enabled)
             gesture = Gesture.Press;
-        if (!settings.For(gesture).Enabled)
+        if (!activeSettings.For(gesture).Enabled)
             return;
         if (gesture == Gesture.Eraser)
             eraserGestures++;
@@ -410,7 +512,7 @@ internal sealed class MainWindow : Form
         {
             Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out uint pid);
             using var process = Process.GetProcessById((int)pid);
-            return settings.ExcludedApps.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Any(n => string.Equals(Path.GetFileNameWithoutExtension(n), process.ProcessName, StringComparison.OrdinalIgnoreCase));
+            return settings.ExcludedApps.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Any(n => string.Equals(ProfileLibrary.ProcessName(n), ProfileLibrary.ProcessName(process.ProcessName), StringComparison.OrdinalIgnoreCase));
         }
         catch
         {
@@ -431,14 +533,27 @@ internal sealed class MainWindow : Form
 
     private void ResetConnection()
     {
+        ResetConnectionState();
+        Connect(0, false, true);
+    }
+
+    private void ResetConnectionState()
+    {
         ResetGesture();
         selectedRawDevice = 0;
+        lastPressure = null;
+        reconnectSchedule.Reset(Environment.TickCount64);
         haptics.Disconnect();
     }
 
     private void TogglePause()
     {
-        paused = !paused;
+        pauseState.Set(!paused);
+        PauseChanged();
+    }
+
+    private void PauseChanged()
+    {
         ResetGesture();
         pauseButton.Text = paused ? "Resume" : "Pause";
         pauseMenu.Text = paused ? "Resume feedback" : "Pause feedback";
@@ -463,13 +578,17 @@ internal sealed class MainWindow : Form
     {
         try
         {
-            if (m.Msg == Native.WM_INPUT)
+            if (m.Msg == ShortcutRegistration.Message && (int)m.WParam == ShortcutRegistration.Id)
+                TogglePause();
+            else if (m.Msg == Native.WM_INPUT)
                 raw?.Read(m.LParam);
             else if (m.Msg == Native.WM_INPUT_DEVICE_CHANGE)
             {
                 raw?.DeviceChanged(m.LParam);
                 if (m.WParam == 2 && selectedRawDevice == m.LParam)
-                    ResetConnection();
+                    ResetConnectionState();
+                else if (m.WParam == 1)
+                    reconnectSchedule.Reset(Environment.TickCount64);
             }
             else if (m.Msg == 0x11 || m.Msg == 0x16)
                 ResetGesture();
@@ -485,22 +604,34 @@ internal sealed class MainWindow : Form
 
     private void SessionChanged(object sender, SessionSwitchEventArgs e)
     {
-        if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.SessionLogoff)
-            PostReset();
+        if (e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.SessionLogoff or SessionSwitchReason.SessionUnlock or SessionSwitchReason.SessionLogon)
+            PostState(() =>
+            {
+                sessionLocked = e.Reason is SessionSwitchReason.SessionLock or SessionSwitchReason.SessionLogoff;
+                ResetConnectionState();
+            });
     }
 
     private void PowerChanged(object sender, PowerModeChangedEventArgs e)
     {
         if (e.Mode is PowerModes.Suspend or PowerModes.Resume)
-            PostReset();
+            PostState(() =>
+            {
+                powerSuspended = e.Mode == PowerModes.Suspend;
+                ResetConnectionState();
+            });
     }
 
-    private void PostReset()
+    private void PostState(Action update)
     {
         try
         {
             if (!IsDisposed)
-                BeginInvoke(ResetConnection);
+                BeginInvoke(() =>
+                {
+                    if (!shuttingDown)
+                        update();
+                });
         }
         catch (InvalidOperationException)
         {
@@ -561,9 +692,12 @@ internal sealed class MainWindow : Form
         pad.Invalidate();
         tray.Text = paused ? "PenPulse — paused" : haptics.Connected ? "PenPulse — background feedback active" : "PenPulse — open to connect your pen";
         configuration.SetConnection(haptics.Connected, paused);
-        live.Text = $"Last action: {lastGesture}. {(haptics.DrawingActive ? "Movement feedback active." : "Settings save automatically.")}\n{(string.IsNullOrEmpty(inputFault) ? "After restarting or sleep, touch the blue pad to reconnect." : inputFault)}";
+        features?.UpdateDiagnostics(GetDiagnosticSnapshot());
+        live.Text = $"{activeProfileName} · Last action: {lastGesture}. {(pauseState.Until is long until ? "Resumes in " + Math.Max(1, (until - Environment.TickCount64 + 59999) / 60000) + " min." : "")}\n{(string.IsNullOrEmpty(inputFault) ? haptics.TextureStatus : inputFault)}";
         if (!string.IsNullOrEmpty(saveFault))
             live.Text = saveFault;
+        else if (!string.IsNullOrEmpty(featureFault))
+            live.Text = "Profiles or desktop settings: " + featureFault;
         var now = Environment.TickCount64;
         if (now - lastStatusWrite < 5000)
             return;
@@ -579,6 +713,9 @@ internal sealed class MainWindow : Form
                 updatedUtc = DateTimeOffset.UtcNow,
                 connected = haptics.Connected,
                 paused,
+                activeProfile = activeProfileName,
+                pressureSeen,
+                texture = haptics.TextureStatus,
                 rawReports = raw?.Reports ?? 0,
                 gestures = recognized,
                 lastGesture,
@@ -604,16 +741,18 @@ internal sealed class MainWindow : Form
                 topButtonShortcuts = raw?.Shortcuts ?? 0,
                 topButtonGestures,
                 penButtonReleaseReports = raw?.PenShortcutReleaseReports ?? 0,
-                drawingEnabled = settings.DrawingFeedback,
+                drawingEnabled = activeSettings.DrawingFeedback,
                 drawingAvailable = haptics.DrawingAvailable,
                 drawingActive = haptics.DrawingActive,
                 drawingStarts = haptics.DrawingStarts,
-                drawingMode = "Repeated Click",
+                drawingMode = haptics.TextureStatus,
+                drawingRequestedTexture = activeSettings.DrawingTexture.ToString(),
+                pressureFeedback = activeSettings.PressureFeedback,
                 drawingPulses = haptics.DrawingPulses,
-                overallStrength = settings.Intensity,
-                drawingStrength = settings.DrawingStrength,
-                drawingInterval = settings.DrawingIntervalMilliseconds,
-                drawingOnlyWhenMoving = settings.DrawingOnlyWhenMoving,
+                overallStrength = activeSettings.Intensity,
+                drawingStrength = activeSettings.DrawingStrength,
+                drawingInterval = activeSettings.DrawingIntervalMilliseconds,
+                drawingOnlyWhenMoving = activeSettings.DrawingOnlyWhenMoving,
                 stopCommands = haptics.StopCommands,
                 stopDiagnostic = haptics.StopDiagnostic,
                 display = new
@@ -639,6 +778,9 @@ internal sealed class MainWindow : Form
         shuttingDown = true;
         ResetGesture();
         statusTimer.Stop();
+        runtimeTimer.Stop();
+        previewTimer.Stop();
+        pauseShortcut?.Dispose();
         SystemEvents.SessionSwitch -= SessionChanged;
         SystemEvents.PowerModeChanged -= PowerChanged;
         if (hook != 0)
@@ -671,10 +813,160 @@ internal sealed class MainWindow : Form
             holdTimer.Dispose();
             statusTimer.Dispose();
             fallbackTimer.Dispose();
+            runtimeTimer.Dispose();
+            previewTimer.Dispose();
             appIcon.Dispose();
         }
 
         base.Dispose(disposing);
+    }
+
+    private bool ForegroundMatches()
+    {
+        Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out uint pid);
+        return pid != 0 && pid == foregroundPid && foregroundProcess != null;
+    }
+
+    private void UpdateActiveProfile(bool force = false)
+    {
+        if (calibrating || shuttingDown)
+            return;
+        Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out uint pid);
+        if (!force && pid == foregroundPid && foregroundProcess != null)
+            return;
+        string? name = null;
+        try
+        {
+            using var process = Process.GetProcessById((int)pid);
+            name = process.ProcessName;
+        }
+        catch
+        {
+        }
+
+        var profile = name == null || pid == Environment.ProcessId ? null : profiles.Resolve(name);
+        string id = profile?.Id ?? "default";
+        bool changed = id != activeProfileId;
+        foregroundPid = pid;
+        foregroundProcess = name;
+        if (!force && !changed)
+            return;
+        // Stop contact feedback before switching. A top-button sequence belongs
+        // to its initial press, so opening Windows' pen menu must not cut it short.
+        contact.Reset();
+        mouseContact = false;
+        holdTimer.Stop();
+        fallback.Clear();
+        fallbackTimer.Stop();
+        if (force)
+            haptics.Cancel();
+        else
+            haptics.CancelContact();
+        activeProfileId = id;
+        activeProfileName = profile?.Name ?? "Default settings";
+        activeSettings = profile?.Feedback ?? settings;
+        haptics.Configure(activeSettings, preserveShortcut: !force);
+        gestures.HoldMilliseconds = activeSettings.HoldMilliseconds;
+        gestures.DoubleTapMilliseconds = activeSettings.DoubleTapMilliseconds == 0 ? (int)Native.GetDoubleClickTime() : activeSettings.DoubleTapMilliseconds;
+        stroke.MovementThreshold = activeSettings.DrawingMovementThreshold * DeviceDpi / 96d;
+        stroke.IdleMilliseconds = activeSettings.DrawingStopMilliseconds;
+    }
+
+    private void TryReconnect()
+    {
+        if (!haptics.Connected && !calibrating && desktopOptions.AutoReconnect)
+            Connect(0, false);
+    }
+
+    private void SaveProfiles()
+    {
+        try
+        {
+            LocalJson.Save(ProfilesPath, profiles);
+            featureFault = "";
+            UpdateActiveProfile(true);
+        }
+        catch (Exception e)
+        {
+            featureFault = e.Message;
+            throw;
+        }
+    }
+
+    private void SaveDesktopOptions()
+    {
+        desktopOptions.Normalize();
+        try
+        {
+            LocalJson.Save(DesktopOptionsPath, desktopOptions);
+            featureFault = "";
+            pauseShortcut?.Apply(desktopOptions);
+            reconnectSchedule.Reset(Environment.TickCount64);
+            UpdateStatus();
+        }
+        catch (Exception e)
+        {
+            featureFault = e.Message;
+            throw;
+        }
+    }
+
+    private DiagnosticSnapshot GetDiagnosticSnapshot()
+    {
+        long age = raw is { Reports: > 0 } ? Math.Max(0, Environment.TickCount64 - raw.LastReportAt) : -1;
+        string reconnect = !desktopOptions.AutoReconnect ? "Automatic reconnect is off; touch the blue pad to connect." : haptics.Connected ? "Connected." : $"Automatic retry enabled ({reconnectSchedule.Attempts} attempts). Fresh pen input retries sooner; the blue pad remains available.";
+        return new DiagnosticSnapshot(Application.ProductVersion.Split('+')[0], haptics.Connected, paused, sessionLocked || powerSuspended, IsExcluded() || (!calibrating && !ForegroundMatches()), inputFault.Length > 0, activeSettings.Intensity, activeSettings.DrawingFeedback, activeSettings.DrawingStrength, activeProfileName, raw?.Reports ?? 0, age, pressureSeen, haptics.IntensitySupported, haptics.TextureStatus, reconnect, pauseShortcut?.Status ?? "Shortcut is starting.", haptics.ConnectionMethod + ": " + haptics.ConnectionStage, haptics.RoutingDiagnostic, saveFault + featureFault);
+    }
+
+    private void Calibrate()
+    {
+        if (!haptics.Connected || paused)
+        {
+            MessageBox.Show("Connect the pen on the blue pad and resume feedback before calibrating.", "PenPulse");
+            return;
+        }
+
+        ResetGesture();
+        calibrating = true;
+        try
+        {
+            using var wizard = new CalibrationForm(settings, haptics.AvailableTextures, PreviewCalibration, StopCalibrationPreview);
+            if (wizard.ShowDialog(this) == DialogResult.OK)
+            {
+                settings.CopyFeedbackFrom(wizard.Result);
+                configuration.Reload();
+                SaveSettings();
+            }
+        }
+        finally
+        {
+            StopCalibrationPreview();
+            calibrating = false;
+            UpdateActiveProfile(true);
+            UpdateStatus();
+        }
+    }
+
+    private void PreviewCalibration(Settings draft, Gesture? gesture)
+    {
+        StopCalibrationPreview();
+        if (paused || !haptics.Connected || sessionLocked || powerSuspended)
+            return;
+        haptics.Configure(draft);
+        if (gesture is Gesture action)
+            haptics.Play(action);
+        else
+        {
+            previewUntil = Environment.TickCount64 + 800;
+            haptics.SetDrawing(true, .6);
+            previewTimer.Start();
+        }
+    }
+
+    private void StopCalibrationPreview()
+    {
+        previewTimer.Stop();
+        haptics.Cancel();
     }
 
     private static Icon MakeIcon()
